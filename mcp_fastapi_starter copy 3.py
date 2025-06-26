@@ -1,11 +1,10 @@
-# MCP Starter: FastAPI + LangChain + Bitbucket Integration (with Repo Auto-Discovery and Filtering)
+# MCP Starter: FastAPI + LangChain + Bitbucket Integration (Updated for LangChain Local LLM with Startup Validation and Background Processing)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Dict
 import requests
 import os
-import subprocess
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSequence
 from langchain_community.llms import Ollama
@@ -13,26 +12,20 @@ import tempfile
 from dotenv import load_dotenv
 from uuid import uuid4
 from threading import Lock
-import shutil
-import hashlib
 
-load_dotenv()
+load_dotenv()  # Load variables from .env if available
 
 app = FastAPI()
 
 # === Configuration === #
-BITBUCKET_WORKSPACE = os.getenv("BB_WORKSPACE")
-BITBUCKET_USER = os.getenv("BB_USER")
-BITBUCKET_APP_PASSWORD = os.getenv("BB_APP_PASSWORD")
-BITBUCKET_LOCAL_CLONE_DIR = os.getenv("BB_LOCAL_CLONE_DIR", "cloned_repos")
-BITBUCKET_PROJECT_FILTER = os.getenv("BB_PROJECT_FILTER", "").split(",")
-CURRENT_PROJECT_PATH = os.getenv("CURRENT_PROJECT_PATH", os.getcwd())
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+BITBUCKET_REPO_URL = os.getenv("BITBUCKET_REPO_URL", "https://bitbucket.org/your-org/your-repo.git")
+BITBUCKET_BRANCH = os.getenv("BITBUCKET_BRANCH", "feature/mcp-generated")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")  # default to llama3
 
 # === Validate Ollama Startup === #
 def validate_ollama_model(model: str):
     try:
-        response = requests.get("http://localhost:11434/api/tags")
+        response = requests.get(f"http://localhost:11434/api/tags")
         if response.status_code != 200:
             raise Exception("Ollama server not responding")
 
@@ -52,59 +45,12 @@ class MCPRequest(BaseModel):
     service_name: str
     context_files: List[str]
 
-# === Status Tracking and Cache === #
+# === Status Tracking === #
 task_status: Dict[str, str] = {}
 task_result: Dict[str, str] = {}
 task_lock = Lock()
-context_cache: Dict[str, str] = {}
 
-# === Repo Utilities === #
-def fetch_all_bitbucket_repos():
-    url = f"https://api.bitbucket.org/2.0/repositories/{BITBUCKET_WORKSPACE}"
-    repos = []
-
-    while url:
-        response = requests.get(url, auth=(BITBUCKET_USER, BITBUCKET_APP_PASSWORD))
-        if response.status_code != 200:
-            break
-        data = response.json()
-        repos.extend(data.get("values", []))
-        url = data.get("next")
-
-    paths = []
-    os.makedirs(BITBUCKET_LOCAL_CLONE_DIR, exist_ok=True)
-    for repo in repos:
-        project_key = repo.get("project", {}).get("key", "")
-        if BITBUCKET_PROJECT_FILTER and project_key not in BITBUCKET_PROJECT_FILTER:
-            continue
-
-        name = repo['name']
-        clone_url = repo['links']['clone'][0]['href']
-        dest = os.path.join(BITBUCKET_LOCAL_CLONE_DIR, name)
-        if not os.path.exists(dest):
-            subprocess.run(["git", "clone", clone_url, dest])
-        paths.append(dest)
-    return paths
-
-def extract_context_from_repo(repo_path, file_types=(".java", ".md", ".yml")):
-    repo_hash = hashlib.md5(repo_path.encode()).hexdigest()
-    if repo_hash in context_cache:
-        return context_cache[repo_hash]
-
-    context = ""
-    for root, _, files in os.walk(repo_path):
-        for file in files:
-            if file.endswith(file_types):
-                try:
-                    with open(os.path.join(root, file), "r", encoding="utf-8", errors="ignore") as f:
-                        context += f"\n# {file}:\n" + f.read()[:3000]
-                except:
-                    continue
-
-    context_cache[repo_hash] = context
-    return context
-
-# === Local Context Loader === #
+# === Utils === #
 def load_context(files: List[str]) -> str:
     context_data = ""
     for file in files:
@@ -113,7 +59,6 @@ def load_context(files: List[str]) -> str:
                 context_data += f"\n# From {file}:\n" + f.read() + "\n"
     return context_data
 
-# === Prompt Template === #
 def build_prompt_template() -> PromptTemplate:
     return PromptTemplate(
         input_variables=["context", "task"],
@@ -142,30 +87,29 @@ Output only the source code blocks in Java.
 """
     )
 
-# === Code Generation Runner === #
 def run_generation(req: MCPRequest, task_id: str):
     try:
-        repo_paths = fetch_all_bitbucket_repos()
-        repo_paths.append(CURRENT_PROJECT_PATH)
-        total_context = "".join([extract_context_from_repo(p) for p in repo_paths])
-        total_context += load_context(req.context_files)
-
+        context = load_context(req.context_files)
         prompt_template = build_prompt_template()
         runnable = prompt_template | llm
 
         response = runnable.invoke({
-            "context": total_context,
+            "context": context,
             "task": req.prompt
         })
 
-        with task_lock:
-            task_status[task_id] = "completed"
-            task_result[task_id] = response
+        if response:
+            with task_lock:
+                task_status[task_id] = "completed"
+                task_result[task_id] = response
+        else:
+            with task_lock:
+                task_status[task_id] = "failed: empty response"
     except Exception as e:
         with task_lock:
             task_status[task_id] = f"failed: {str(e)}"
 
-# === FastAPI Endpoints === #
+# === Endpoints === #
 @app.get("/")
 def health_check():
     return {"status": f"MCP service is running (Ollama mode: {OLLAMA_MODEL})"}
