@@ -1,1 +1,53 @@
 pip install -U langchain-community
+
+curl -X POST "http://localhost:8000/generate?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "prompt": "Generate loan approval logic based on credit score and income.",
+        "service_name": "LoanApprovalService",
+        "context_files": ["./templates/security.java", "./templates/model.java"]
+      }'
+
+      brew install ollama && ollama pull mistral && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && uvicorn mcp_fastapi_starter:app --reload
+
+
+      import subprocess
+import os
+import sys
+
+def run(cmd):
+    print(f"\nRunning: {cmd}")
+    result = subprocess.run(cmd, shell=True)
+    if result.returncode != 0:
+        print(f"❌ Command failed: {cmd}")
+        sys.exit(1)
+
+# === 1. Install Ollama via Homebrew ===
+run("brew install ollama")
+
+# === 2. Pull the Mistral model ===
+run("ollama pull mistral")
+
+# === 3. Create and activate virtual environment ===
+run("python3 -m venv venv")
+activate_script = "source venv/bin/activate"
+
+# === 4. Install Python dependencies ===
+run(f"{activate_script} && pip install -r requirements.txt")
+
+# === 5. Launch FastAPI app ===
+run(f"{activate_script} && uvicorn mcp_fastapi_starter:app --reload")
+
+
+
+fastapi
+uvicorn
+python-dotenv
+requests
+langchain
+langchain-community
+
+
+pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn mcp_fastapi_starter:app --reload
