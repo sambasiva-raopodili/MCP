@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "mcp-fastapi-starter"
+version = "0.1.0"
+description = "MCP-based FastAPI service to generate business logic and unit tests from LLM prompts"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "mcp_fastapi_starter"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+fastapi = "^0.110.0"
+uvicorn = "^0.29.0"
+langchain = "^0.1.16"
+openai = "^1.30.1"
+gitpython = "^3.1.43"
+requests = "^2.32.3"
+pydantic = "^2.7.1"
+python-dotenv = "^1.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
