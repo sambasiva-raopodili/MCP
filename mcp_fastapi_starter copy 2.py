@@ -8,6 +8,7 @@ import os
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSequence
 from langchain_community.llms import Ollama
+from git import Repo
 import tempfile
 from dotenv import load_dotenv
 from uuid import uuid4
@@ -47,7 +48,6 @@ class MCPRequest(BaseModel):
 
 # === Status Tracking === #
 task_status: Dict[str, str] = {}
-task_result: Dict[str, str] = {}
 task_lock = Lock()
 
 # === Utils === #
@@ -63,29 +63,40 @@ def build_prompt_template() -> PromptTemplate:
     return PromptTemplate(
         input_variables=["context", "task"],
         template="""
-You are a senior Java backend engineer working in a Spring Boot-based microservices architecture.
+You are a backend developer working in a Java-based microservices architecture for a fintech company.
 
-You are provided with relevant project context and a functional requirement:
+Below is the coding context:
 
 {context}
 
-Write detailed, enterprise-grade Java code using **Spring Boot**, applying the following standards:
+Write **Java** business logic and its corresponding **JUnit test case** for the following requirement:
 
-1. Generate a complete business logic class (e.g., service or controller) using Spring annotations.
-2. Use DTOs and validation annotations (`@Valid`, `@NotNull`, etc.) appropriately.
-3. Handle exceptions using Spring's `@ControllerAdvice` or inline try-catch.
-4. Include proper logging with SLF4J (`LoggerFactory`).
-5. Adhere to clean architecture: service, repository, model separation.
-6. Java 11+ features (streams, var, Optional) can be used where relevant.
+{task}
 
-Also, generate a comprehensive **JUnit 5** test class that:
-- Mocks dependencies with Mockito
-- Tests both normal and edge-case scenarios
-- Uses `@SpringBootTest` or `@WebMvcTest` as applicable
-
-Output only the source code blocks in Java.
+Ensure:
+- Use Java syntax
+- Apply standard Java coding practices
+- Include necessary class structure, imports, and method stubs
+- Unit tests should follow JUnit 5 standards
 """
     )
+
+def clone_repo(temp_dir: str):
+    return Repo.clone_from(BITBUCKET_REPO_URL, temp_dir)
+
+def push_code(service_name: str, code: str):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        repo = clone_repo(tmp_dir)
+        file_path = os.path.join(tmp_dir, f"services/{service_name}.java")
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "w") as f:
+            f.write(code)
+
+        repo.git.checkout("-b", BITBUCKET_BRANCH)
+        repo.index.add([file_path])
+        repo.index.commit(f"Add {service_name} service via MCP")
+        origin = repo.remote(name='origin')
+        origin.push(BITBUCKET_BRANCH)
 
 def run_generation(req: MCPRequest, task_id: str):
     try:
@@ -99,9 +110,9 @@ def run_generation(req: MCPRequest, task_id: str):
         })
 
         if response:
+            push_code(req.service_name, response)
             with task_lock:
                 task_status[task_id] = "completed"
-                task_result[task_id] = response
         else:
             with task_lock:
                 task_status[task_id] = "failed: empty response"
@@ -115,22 +126,15 @@ def health_check():
     return {"status": f"MCP service is running (Ollama mode: {OLLAMA_MODEL})"}
 
 @app.post("/generate")
-def generate_code(req: MCPRequest, background_tasks: BackgroundTasks, sync: bool = False):
+def generate_code(req: MCPRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid4())
     with task_lock:
         task_status[task_id] = "started"
-
-    if sync:
-        run_generation(req, task_id)
-        with task_lock:
-            return {"task_id": task_id, "status": task_status[task_id], "result": task_result.get(task_id, "")}
-    else:
-        background_tasks.add_task(run_generation, req, task_id)
-        return {"message": "Generation task started in background.", "task_id": task_id}
+    background_tasks.add_task(run_generation, req, task_id)
+    return {"message": "Generation task started in background.", "task_id": task_id}
 
 @app.get("/status/{task_id}")
 def get_status(task_id: str):
     with task_lock:
         status = task_status.get(task_id, "unknown")
-        result = task_result.get(task_id)
-    return {"task_id": task_id, "status": status, "result": result}
+    return {"task_id": task_id, "status": status}
